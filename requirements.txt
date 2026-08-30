@@ -1,0 +1,8 @@
+streamlit
+altair>=5
+pandas
+numpy
+matplotlib
+plotly>=6
+scikit-learn>=1.2
+xgboost>=2.0
