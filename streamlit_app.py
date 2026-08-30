@@ -421,9 +421,16 @@ def render_project_overview(
 
 
 def render_exploration(df: pd.DataFrame) -> None:
+    """Render interactive EDA while preserving the existing application structure."""
     st.header("Interactive data exploration")
-    st.caption("Filter the dataset, hover for exact values, and zoom or pan the scatter plot.")
+    st.caption(
+        "Filter the dataset, inspect distributions and relationships, and connect the live EDA "
+        "directly to the figures discussed in Section 2 of the report."
+    )
 
+    # -----------------------------------------------------------------
+    # Existing exploration filters
+    # -----------------------------------------------------------------
     with st.container(border=True):
         st.subheader("Exploration filters")
         filter_col1, filter_col2, filter_col3 = st.columns(3)
@@ -452,10 +459,14 @@ def render_exploration(df: pd.DataFrame) -> None:
         & df["price"].between(*price_range)
         & df["carat"].between(*carat_range)
     ].copy()
+
     if filtered.empty:
         st.warning("No records match these filters. Widen one or more ranges.")
         return
 
+    # -----------------------------------------------------------------
+    # Existing summary metrics and automatic EDA insight
+    # -----------------------------------------------------------------
     correlation = filtered["carat"].corr(filtered["price"])
     metric_row(
         [
@@ -475,6 +486,9 @@ def render_exploration(df: pd.DataFrame) -> None:
         icon=":material/insights:",
     )
 
+    # -----------------------------------------------------------------
+    # Main EDA navigation
+    # -----------------------------------------------------------------
     view = st.segmented_control(
         "Visual analysis",
         ["Distribution", "Carat relationship", "Category comparison", "Correlation"],
@@ -482,6 +496,10 @@ def render_exploration(df: pd.DataFrame) -> None:
         width="stretch",
     )
 
+    # =================================================================
+    # DISTRIBUTION
+    # Covers report Sections 2.6.1, 2.6.2 and 2.6.7
+    # =================================================================
     if view == "Distribution":
         hist = (
             alt.Chart(filtered)
@@ -493,6 +511,7 @@ def render_exploration(df: pd.DataFrame) -> None:
             )
             .properties(height=380, title="Price distribution")
         )
+
         box_sample = filtered.sample(min(12000, len(filtered)), random_state=RANDOM_STATE)
         box = (
             alt.Chart(box_sample)
@@ -504,10 +523,43 @@ def render_exploration(df: pd.DataFrame) -> None:
             )
             .properties(height=380, title="Price spread by cut")
         )
+
         left, right = st.columns(2)
         left.altair_chart(hist, key="price_histogram")
         right.altair_chart(box, key="price_boxplot")
 
+        st.caption(
+            "Price is right-skewed, while the cut boxplot shows raw group differences. "
+            "The cut comparison is descriptive because carat, colour and clarity also vary between groups."
+        )
+
+        st.divider()
+        st.subheader("Distribution of numerical diamond characteristics")
+        selected_numeric = st.segmented_control(
+            "Numerical feature",
+            ["carat", "depth", "table", "x", "y", "z"],
+            default="carat",
+            key="eda_numeric_distribution_selector",
+        )
+        numeric_distribution = (
+            alt.Chart(filtered)
+            .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+            .encode(
+                x=alt.X(f"{selected_numeric}:Q", bin=alt.Bin(maxbins=45), title=selected_numeric.title()),
+                y=alt.Y("count():Q", title="Diamonds"),
+                tooltip=[alt.Tooltip("count():Q", title="Diamonds")],
+            )
+            .properties(height=390, title=f"Distribution of {selected_numeric}")
+        )
+        st.altair_chart(numeric_distribution, key="selected_numeric_distribution")
+        st.caption(
+            "Use this chart to inspect the distributions discussed in Section 2.6.7, especially carat, depth and table."
+        )
+
+    # =================================================================
+    # CARAT RELATIONSHIP
+    # Covers report Sections 2.6.5 and 2.6.9
+    # =================================================================
     elif view == "Carat relationship":
         scatter_sample = filtered.sample(min(6500, len(filtered)), random_state=RANDOM_STATE)
         scatter = (
@@ -529,12 +581,66 @@ def render_exploration(df: pd.DataFrame) -> None:
             .interactive()
         )
         st.altair_chart(scatter, key="carat_price_scatter")
+        st.caption(
+            f"The filtered Pearson correlation is {correlation:.3f}. The upward pattern is strong but not perfectly linear, "
+            "which supports comparing nonlinear regression models with the linear baseline."
+        )
 
+        st.divider()
+        left, right = st.columns(2)
+
+        carat_hist = (
+            alt.Chart(filtered)
+            .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+            .encode(
+                x=alt.X("carat:Q", bin=alt.Bin(maxbins=45), title="Carat"),
+                y=alt.Y("count():Q", title="Diamonds"),
+                tooltip=[alt.Tooltip("count():Q", title="Diamonds")],
+            )
+            .properties(height=390, title="Carat distribution")
+        )
+        left.altair_chart(carat_hist, key="eda_carat_distribution")
+
+        carat_group_data = filtered.copy()
+        carat_group_data["Carat group"] = pd.cut(
+            carat_group_data["carat"],
+            bins=[0, 0.50, 1.00, 1.50, 2.00, np.inf],
+            labels=["≤ 0.50", "0.51–1.00", "1.01–1.50", "1.51–2.00", "> 2.00"],
+        )
+        carat_group_sample = carat_group_data.sample(
+            min(12000, len(carat_group_data)), random_state=RANDOM_STATE
+        )
+        carat_group_box = (
+            alt.Chart(carat_group_sample)
+            .mark_boxplot(extent=1.5, size=42)
+            .encode(
+                x=alt.X(
+                    "Carat group:N",
+                    sort=["≤ 0.50", "0.51–1.00", "1.01–1.50", "1.51–2.00", "> 2.00"],
+                    title="Carat group",
+                ),
+                y=alt.Y("price:Q", title="Observed price (USD)"),
+                color=alt.Color("Carat group:N", legend=None),
+                tooltip=[alt.Tooltip("price:Q", format="$,.0f")],
+            )
+            .properties(height=390, title="Price distribution across carat groups")
+        )
+        right.altair_chart(carat_group_box, key="eda_price_by_carat_group")
+
+        st.caption(
+            "Prices generally rise across carat groups, but the within-group spread shows that carat alone does not determine price."
+        )
+
+    # =================================================================
+    # CATEGORY COMPARISON
+    # Covers report Sections 2.6.2, 2.6.3 and 2.6.4
+    # =================================================================
     elif view == "Category comparison":
         dimension = st.segmented_control(
-            "Compare by", ["cut", "color", "clarity"], default="cut"
+            "Compare by", ["cut", "color", "clarity"], default="cut", key="eda_category_selector"
         )
         ordering = {"cut": CUT_ORDER, "color": COLOUR_ORDER, "clarity": CLARITY_ORDER}[dimension]
+
         category_summary = (
             filtered.groupby(dimension, observed=False)["price"]
             .agg(["mean", "median", "count"])
@@ -542,6 +648,9 @@ def render_exploration(df: pd.DataFrame) -> None:
             .dropna()
             .reset_index()
         )
+
+        left, right = st.columns([0.95, 1.05])
+
         category_chart = (
             alt.Chart(category_summary)
             .mark_bar(cornerRadiusEnd=5)
@@ -558,7 +667,21 @@ def render_exploration(df: pd.DataFrame) -> None:
             )
             .properties(height=430, title=f"Price profile by {dimension}")
         )
-        st.altair_chart(category_chart, key="category_price_chart")
+        left.altair_chart(category_chart, key="category_price_chart")
+
+        category_box_sample = filtered.sample(min(12000, len(filtered)), random_state=RANDOM_STATE)
+        category_box = (
+            alt.Chart(category_box_sample)
+            .mark_boxplot(extent=1.5, size=36)
+            .encode(
+                x=alt.X(f"{dimension}:N", sort=ordering, title=dimension.title()),
+                y=alt.Y("price:Q", title="Observed price (USD)"),
+                color=alt.Color(f"{dimension}:N", sort=ordering, legend=None),
+            )
+            .properties(height=430, title=f"Price spread by {dimension}")
+        )
+        right.altair_chart(category_box, key="category_price_boxplot")
+
         st.dataframe(
             category_summary,
             hide_index=True,
@@ -569,12 +692,20 @@ def render_exploration(df: pd.DataFrame) -> None:
                 "count": st.column_config.NumberColumn("Diamonds", format="localized"),
             },
         )
+        st.caption(
+            "These category comparisons describe associations in the observed data. They should not be interpreted as isolated causal effects."
+        )
 
+    # =================================================================
+    # CORRELATION
+    # Covers report Sections 2.6.6 and 2.6.8
+    # =================================================================
     else:
         corr = filtered[NUMERICAL_COLUMNS].corr()
         corr_long = corr.rename_axis("Variable A").reset_index().melt(
             id_vars="Variable A", var_name="Variable B", value_name="Correlation"
         )
+
         heatmap = (
             alt.Chart(corr_long)
             .mark_rect(cornerRadius=2)
@@ -596,11 +727,76 @@ def render_exploration(df: pd.DataFrame) -> None:
                 x=alt.X("Variable A:N", sort=NUMERICAL_COLUMNS),
                 y=alt.Y("Variable B:N", sort=NUMERICAL_COLUMNS),
                 text=alt.Text("Correlation:Q", format=".2f"),
-                color=alt.condition("abs(datum.Correlation) > 0.55", alt.value("white"), alt.value("#0F172A")),
+                color=alt.condition(
+                    "abs(datum.Correlation) > 0.55",
+                    alt.value("white"),
+                    alt.value("#0F172A"),
+                ),
             )
         )
-        st.altair_chart(heatmap + labels, key="correlation_heatmap")
 
+        price_corr = (
+            corr["price"]
+            .drop("price")
+            .sort_values()
+            .rename("Correlation")
+            .reset_index()
+)
+
+        price_corr.columns = [
+            "Feature",
+            "Correlation"
+        ]
+        
+        price_corr_chart = (
+            alt.Chart(price_corr)
+            .mark_bar(cornerRadiusEnd=5)
+            .encode(
+                y=alt.Y("Feature:N", sort="x", title=None),
+                x=alt.X("Correlation:Q", title="Pearson correlation with price"),
+                color=alt.Color("Correlation:Q", scale=alt.Scale(scheme="blues"), legend=None),
+                tooltip=["Feature:N", alt.Tooltip("Correlation:Q", format=".3f")],
+            )
+            .properties(height=500, title="Numerical correlation with price")
+        )
+
+        left, right = st.columns([1.15, 0.85])
+        left.altair_chart(heatmap + labels, key="correlation_heatmap")
+        right.altair_chart(price_corr_chart, key="price_correlation_chart")
+
+        st.divider()
+        st.subheader("Physical dimensions and price")
+        dimension = st.segmented_control(
+            "Dimension", ["x", "y", "z"], default="x", key="eda_dimension_selector"
+        )
+        dimension_sample = filtered.sample(min(6500, len(filtered)), random_state=RANDOM_STATE)
+        dimension_chart = (
+            alt.Chart(dimension_sample)
+            .mark_circle(opacity=0.42, size=40)
+            .encode(
+                x=alt.X(f"{dimension}:Q", title=f"{dimension} dimension (mm)"),
+                y=alt.Y("price:Q", title="Observed price (USD)"),
+                color=alt.Color("carat:Q", title="Carat", scale=alt.Scale(scheme="blues")),
+                tooltip=[
+                    alt.Tooltip(f"{dimension}:Q", format=".2f"),
+                    alt.Tooltip("carat:Q", format=".2f"),
+                    alt.Tooltip("price:Q", format="$,.0f"),
+                    "cut:N",
+                    "color:N",
+                    "clarity:N",
+                ],
+            )
+            .properties(height=460, title=f"{dimension} dimension and price")
+            .interactive()
+        )
+        st.altair_chart(dimension_chart, key="dimension_price_scatter")
+        st.caption(
+            "Carat and x/y/z are strongly related measures of diamond size. Their correlations and later feature-importance values should therefore be interpreted together."
+        )
+
+    # -----------------------------------------------------------------
+    # Existing filtered-record inspection remains unchanged
+    # -----------------------------------------------------------------
     with st.expander("Inspect filtered records", icon=":material/table_view:"):
         st.dataframe(filtered.head(500), key="filtered_records")
         st.download_button(
